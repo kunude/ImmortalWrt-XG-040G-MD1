@@ -2,7 +2,7 @@
 
 ImmortalWrt firmware for NOKIA BELL XG-040G-MD
 
-编译脚本基于 [OpenWrt-for-XG-040G-MD](https://github.com/dalutou/OpenWrt-for-XG-040G-MD) 修改。
+编译脚本基于 [dalutou/OpenWrt-for-XG-040G-MD](https://github.com/dalutou/OpenWrt-for-XG-040G-MD) 修改。
 
 * 固件使用 ImmortalWrt openwrt-25.12 分支构建。
 * 仅包含流量监控插件luci-app-nlbwmon
