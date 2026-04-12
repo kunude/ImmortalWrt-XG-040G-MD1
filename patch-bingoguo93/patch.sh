@@ -2,8 +2,6 @@
 # 这是一个自动生成的同步脚本，用于将修改应用到新的 OpenWrt 源码根目录
 
 echo "正在应用补丁文件到当前项目..."
-mkdir -p "../package/firmware/linux-firmware"
-cp -f "package/firmware/linux-firmware/Makefile" "../package/firmware/linux-firmware/Makefile"
 mkdir -p "../package/kernel/linux/files"
 cp -f "package/kernel/linux/files/sysctl-nf-conntrack.conf" "../package/kernel/linux/files/sysctl-nf-conntrack.conf"
 mkdir -p "../package/kernel/linux/modules"
