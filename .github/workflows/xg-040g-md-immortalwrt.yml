@@ -5,6 +5,7 @@ permissions:
   actions: write
 
 on:
+  # 手动触发（保留原有功能 + 新增补丁选择）
   workflow_dispatch:
     inputs:
       log_switch:
@@ -12,11 +13,22 @@ on:
         required: false
         default: false
         type: boolean
-      # 新增：自定义提交哈希，留空使用最新commit
       commit_hash:
         description: "指定Git提交哈希(留空默认使用最新提交)"
         required: false
         type: string
+      # 新增：补丁版本选择
+      patch_type:
+        description: "选择补丁版本"
+        required: true
+        default: "patch-bingoguo93"
+        type: choice
+        options:
+          - patch-bingoguo93
+          - patch-xiangtailiang
+  # 新增：定时自动触发（每6小时检查一次远程仓库新Commit，UTC时间）
+  schedule:
+    - cron: '0 0 * * *'
 
 env:
   CONFIG_FILE: "config/xg-040g-md.config"
@@ -29,10 +41,48 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # 仅当需要构建时才执行（自动触发：有新Commit | 手动触发：直接执行）
+    if: steps.check_commit.outputs.should_build == 'true'
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      # ====================== 新增：自动检测远程仓库新Commit ======================
+      - name: Check remote branch for new commits
+        id: check_commit
+        run: |
+          # 获取远程分支最新完整Commit哈希
+          LATEST_COMMIT=$(git ls-remote ${{ env.REPO_URL }} ${{ env.REPO_BRANCH }} | awk '{print $1}')
+          echo "LATEST_COMMIT=$LATEST_COMMIT" >> $GITHUB_ENV
+          echo "🔍 远程分支最新Commit: $LATEST_COMMIT"
+          
+          # 读取上一次构建的Commit（缓存）
+          CACHED_COMMIT=$(cat last_commit.txt 2>/dev/null || echo "")
+          echo "🔍 上一次构建Commit: $CACHED_COMMIT"
+          
+          # 定时触发：无更新则终止构建；手动触发：直接构建
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            if [[ "$LATEST_COMMIT" == "$CACHED_COMMIT" ]]; then
+              echo "✅ 无新Commit，终止定时构建"
+              echo "should_build=false" >> $GITHUB_OUTPUT
+            else
+              echo "🚀 检测到新Commit，开始自动构建"
+              echo "should_build=true" >> $GITHUB_OUTPUT
+              echo "$LATEST_COMMIT" > last_commit.txt
+            fi
+          else
+            echo "🚀 手动触发构建"
+            echo "should_build=true" >> $GITHUB_OUTPUT
+          fi
+
+      # 缓存Commit记录，用于下次对比
+      - name: Cache last commit record
+        uses: actions/cache@v4
+        with:
+          path: last_commit.txt
+          key: last-commit-cache-${{ github.run_id }}
+          restore-keys: last-commit-cache-
 
       - name: Setup environment dependencies
         env:
@@ -65,33 +115,39 @@ jobs:
           python3 -m pip install --upgrade pip setuptools wheel
           python3 -m pip install Unidecode
 
-      # ====================== 新增：支持指定Commit / 默认最新Commit ======================
-      - name: Clone OpenWrt source code (指定提交版本)
+      # ====================== 克隆源码（支持指定Commit/最新Commit） ======================
+      - name: Clone OpenWrt source code
         run: |
           git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" openwrt
           cd openwrt
-          # 如果输入了commit哈希，则切换到指定提交
+          # 指定提交哈希
           if [ -n "${{ inputs.commit_hash }}" ]; then
             git fetch origin ${{ inputs.commit_hash }}
             git checkout ${{ inputs.commit_hash }}
           fi
-          # 获取最终使用的提交信息（用于Release展示）
+          # 导出完整+短Commit信息（修复原BUG）
+          echo "COMMIT_HASH_FULL=$(git rev-parse HEAD)" >> $GITHUB_ENV
           echo "COMMIT_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
           echo "COMMIT_MSG=$(git log -1 --pretty=format:%s)" >> $GITHUB_ENV
           echo "COMMIT_DATE=$(git log -1 --pretty=format:"%Y-%m-%d %H:%M:%S" --date=local)" >> $GITHUB_ENV
 
+      # ====================== 优化：动态应用所选补丁 ======================
       - name: Apply XG-040G-MD Patch Files
         working-directory: ./openwrt
         run: |
-          # 检查 patch 目录和脚本是否存在
-          if [ -d "../patch-bingoguo93" ] && [ -f "../patch-bingoguo93/patch.sh" ]; then
-            echo "--- 正在应用自动化补丁 ---"
-            cp -r -f ../patch-bingoguo93 .
-            chmod +x patch-bingoguo93/patch.sh
-            cd patch-bingoguo93 && ./patch.sh
+          # 获取用户选择的补丁
+          SELECTED_PATCH=${{ inputs.patch_type || 'patch-bingoguo93' }}
+          echo "SELECTED_PATCH=$SELECTED_PATCH" >> $GITHUB_ENV
+          
+          # 校验补丁文件并应用
+          if [ -d "../$SELECTED_PATCH" ] && [ -f "../$SELECTED_PATCH/patch.sh" ]; then
+            echo "--- 正在应用补丁：$SELECTED_PATCH ---"
+            cp -r -f ../$SELECTED_PATCH .
+            chmod +x $SELECTED_PATCH/patch.sh
+            cd $SELECTED_PATCH && ./patch.sh
             echo "--- 补丁应用成功 ---"
           else
-            echo "错误: 未找到 patch-bingoguo93 文件夹或 patch.sh 脚本！"
+            echo "错误: 未找到 $SELECTED_PATCH 补丁目录或脚本！"
             exit 1
           fi
 
@@ -101,12 +157,11 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      # ====================== 优化：配置文件处理（备份+上传） ======================
       - name: Copy configuration and defconfig
         run: |
           [ -f "${CONFIG_FILE}" ] && cp -fv "${CONFIG_FILE}" openwrt/.config || echo "警告: 未找到配置文件"
           cd openwrt && make defconfig
-          [ -e .config ] && cp .config defconfig-final.config  # 备份最终配置
+          [ -e .config ] && cp .config defconfig-final.config
 
       - name: Upload build config files
         uses: actions/upload-artifact@v6
@@ -133,7 +188,6 @@ jobs:
             make -j$(nproc) || make -j1 V=s
           fi
           
-          # 提取设备名称用于命名
           DEVICE_NAME=$(grep -o 'CONFIG_TARGET.*DEVICE_[^=]*=y' .config | head -1 | sed 's/.*DEVICE_\(.*\)=y/\1/')
           [ -n "$DEVICE_NAME" ] && echo "DEVICE_NAME=_$DEVICE_NAME" >> $GITHUB_ENV
           echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
@@ -152,7 +206,7 @@ jobs:
           name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
           path: ${{ env.FIRMWARE }}/*
 
-      # ====================== 优化：Release规范 + 新增Commit信息展示 ======================
+      # ====================== 优化：Release新增补丁信息 ======================
       - name: Generate release tag and notes
         id: tag
         if: env.UPLOAD_RELEASE == 'true'
@@ -165,9 +219,10 @@ jobs:
           构建时间: $(date +"%Y-%m-%d %H:%M")
           源码仓库: ${{ env.REPO_URL }}
           分支: ${{ env.REPO_BRANCH }}
+          使用补丁: ${{ env.SELECTED_PATCH }}
           Commit Date: ${{ env.COMMIT_DATE }}
           Commit Hash: ${{ env.COMMIT_HASH }}
-          Commit: [${{ env.COMMIT_MSG }}](${{ env.REPO_URL }}/commit/${{ env.COMMIT_HASH_FULL }})  # 新增可点击链接
+          Commit: [${{ env.COMMIT_MSG }}](${{ env.REPO_URL }}/commit/${{ env.COMMIT_HASH_FULL }})
           EOF
 
       - name: Publish GitHub Release
