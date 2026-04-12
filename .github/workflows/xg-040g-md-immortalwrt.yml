@@ -83,14 +83,14 @@ jobs:
         working-directory: ./openwrt
         run: |
           # 检查 patch 目录和脚本是否存在
-          if [ -d "../patch" ] && [ -f "../patch/patch.sh" ]; then
+          if [ -d "../patch-bingoguo93" ] && [ -f "../patch-bingoguo93/patch.sh" ]; then
             echo "--- 正在应用自动化补丁 ---"
-            cp -r -f ../patch .
-            chmod +x patch/patch.sh
-            cd patch && ./patch.sh
+            cp -r -f ../patch-bingoguo93 .
+            chmod +x patch-bingoguo93/patch.sh
+            cd patch-bingoguo93 && ./patch.sh
             echo "--- 补丁应用成功 ---"
           else
-            echo "错误: 未找到 patch 文件夹或 patch.sh 脚本！"
+            echo "错误: 未找到 patch-bingoguo93 文件夹或 patch.sh 脚本！"
             exit 1
           fi
 
